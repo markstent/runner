@@ -146,6 +146,63 @@ describe("nextBatch (endless append)", () => {
   });
 });
 
+describe("cross-batch seam fairness", () => {
+  // The first row of every batch must leave all lanes open (no full-block), so
+  // that however the previous batch ended, the player always has a reachable
+  // surviving lane at the join.
+  function firstRowZ(batch: Placement[]): number {
+    return Math.min(...batch.map((p) => p.z));
+  }
+
+  it("every nextBatch begins with an all-lanes-open row (no full-block) for any (seed, batchIndex)", () => {
+    for (let seed = 0; seed < 40; seed++) {
+      for (let i = 0; i < 6; i++) {
+        const batch = nextBatch(seed, i, 0.5, 0);
+        const z0 = firstRowZ(batch);
+        const firstRowBlocks = batch.filter((p) => p.z === z0 && p.type === "full-block");
+        expect(firstRowBlocks, `seed=${seed} batchIndex=${i} first row has a full-block`).toEqual(
+          [],
+        );
+      }
+    }
+  });
+
+  it("an adversarial forced-lane tail concatenated with a fresh batch stays clearable", () => {
+    // (seed=0, batchIndex=1) produces a batch whose first row, BEFORE this fix,
+    // full-blocks left+right (leaving only center). Build a previous-batch tail
+    // that ends forcing the player into "left" (final row blocks center+right),
+    // then join the fresh batch one ROW_SPACING later (zero reaction rows).
+    // Without the breather lead-in this seam is unclearable: the player is stuck
+    // on left, the next row only leaves center open, and there is no time to move.
+    const tailEndZ = 5 * ROW_SPACING;
+    const tail: Placement[] = [
+      { lane: "center", z: tailEndZ, type: "full-block" },
+      { lane: "right", z: tailEndZ, type: "full-block" },
+    ];
+    const seamOffset = tailEndZ; // new batch's first row lands at seamOffset + ROW_SPACING
+    const fresh = nextBatch(0, 1, 0.5, seamOffset);
+    // Sanity: the seam really is one ROW_SPACING apart.
+    expect(firstRowZ(fresh)).toBe(tailEndZ + ROW_SPACING);
+    expect(isClearable(tail.concat(fresh))).toBe(true);
+  });
+
+  it("consecutive batches joined one ROW_SPACING apart are clearable across many seed/index pairs", () => {
+    let combos = 0;
+    for (let seed = 0; seed < 30; seed++) {
+      for (let i = 0; i < 4; i++) {
+        const a = nextBatch(seed, i, 0.5, 0);
+        const aLastZ = Math.max(...a.map((p) => p.z));
+        // Join the next batch at the tightest seam: one ROW_SPACING after a's last row.
+        const b = nextBatch(seed, i + 1, 0.5, aLastZ);
+        expect(firstRowZ(b)).toBe(aLastZ + ROW_SPACING);
+        expect(isClearable(a.concat(b)), `seed=${seed} join ${i}->${i + 1}`).toBe(true);
+        combos++;
+      }
+    }
+    expect(combos).toBeGreaterThanOrEqual(100);
+  });
+});
+
 describe("clearability invariant", () => {
   it("every generated track is clearable across many seeds and difficulties", () => {
     const difficulties = [0, 0.25, 0.5, 0.75, 1];

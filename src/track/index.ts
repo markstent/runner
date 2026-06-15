@@ -103,6 +103,13 @@ const CATALOG: Chunk[] = [
 ];
 
 /**
+ * The guaranteed-open chunk. Its leading rows contain no full-block (every lane
+ * is survivable), so it is always safe to clear from any starting lane. Used as
+ * the fairness fallback in `generate` and as the seam lead-in in `nextBatch`.
+ */
+const BREATHER: Chunk = CATALOG.find((c) => c.name === "breather")!;
+
+/**
  * Number of chunks stitched into a single batch by `generate`. A batch is the
  * unit the endless runner appends on demand (see `nextBatch`). At ~3-5 rows per
  * chunk and ROW_SPACING=12 this is a few hundred world units of track, large
@@ -137,9 +144,9 @@ export function generate(seed: number, difficulty: number): Placement[] {
       z += chunk.rows.length * ROW_SPACING;
     } else {
       // Fall back to the guaranteed-open breather chunk; it never breaks fairness.
-      const safe = chunkRows(CATALOG[0], z);
+      const safe = chunkRows(BREATHER, z);
       placements.push(...safe);
-      z += CATALOG[0].rows.length * ROW_SPACING;
+      z += BREATHER.rows.length * ROW_SPACING;
     }
   }
 
@@ -151,9 +158,16 @@ export function generate(seed: number, difficulty: number): Placement[] {
  *
  * Each batch is a full `generate` run (CHUNK_COUNT chunks) seeded by
  * (seed, batchIndex) and translated so its first row starts at/after `zOffset`.
- * Because every batch is independently clearable and is shifted only by a
- * constant Z, the concatenation of consecutive batches is also clearable
- * (clearability depends on relative row spacing, which translation preserves).
+ *
+ * Cross-batch seam guarantee: every batch is prefixed with the guaranteed-open
+ * breather chunk, whose leading rows contain no full-block (all lanes
+ * survivable). Each batch is individually clearable; validating batches in
+ * isolation does not, however, cover the JOIN between consecutive batches, where
+ * batch N's last row abuts batch N+1's first row one ROW_SPACING apart. Because
+ * the breather lead-in leaves every lane open at the seam, whatever lane the
+ * previous batch forced the player into is always survivable at the boundary,
+ * so the concatenation is clearable by construction regardless of how the
+ * previous batch ended or which zOffset the seam lands on.
  *
  * Same (seed, batchIndex) always returns an identical batch. `difficulty` is
  * forwarded to `generate` (accepted/clamped; consumed by #7).
@@ -164,8 +178,15 @@ export function nextBatch(
   difficulty: number,
   zOffset: number,
 ): Placement[] {
-  const batch = generate(seed + batchIndex, difficulty);
-  return batch.map((p) => ({ ...p, z: p.z + zOffset }));
+  // Open breather lead-in makes the boundary with the previous batch safe.
+  const breather = chunkRows(BREATHER, 0);
+  const leadRows = BREATHER.rows.length;
+  // Generated body, shifted to sit after the breather.
+  const body = generate(seed + batchIndex, difficulty).map((p) => ({
+    ...p,
+    z: p.z + leadRows * ROW_SPACING,
+  }));
+  return breather.concat(body).map((p) => ({ ...p, z: p.z + zOffset }));
 }
 
 /** Materialize a chunk's rows into absolute-Z placements starting at baseZ. */
