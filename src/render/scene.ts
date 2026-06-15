@@ -1,5 +1,11 @@
 import * as THREE from "three";
 import { LANE_X, type Placement } from "../track/index.ts";
+import type { PlayerPose } from "../player/index.ts";
+
+// Where the avatar stands in front of the fixed chase camera (small negative Z).
+const AVATAR_Z = -2;
+// Base height of the placeholder avatar capsule (sits on the deck at this y).
+const AVATAR_BASE_Y = 1;
 
 const PLANE_LENGTH = 200;
 const PLANE_WIDTH = 12;
@@ -21,8 +27,14 @@ export interface RenderScene {
    * (or any superset of the active) track. Placements whose screen depth lands
    * in the visible window are drawn as themed meshes; others are recycled into
    * an object pool. Coins and obstacle types each get a distinct mesh.
+   *
+   * `pose` is the player's render pose from src/player (`pose(playerState)`):
+   * its `x` drives the avatar's lane, `y` its jump height, and `squash` its
+   * slide crouch. Optional and additive (mirrors how `placements` was added) so
+   * existing callers keep working; when omitted the avatar stays at rest. The
+   * rigged-model swap (#12) reuses this same pose contract.
    */
-  render(distance: number, placements?: readonly Placement[]): void;
+  render(distance: number, placements?: readonly Placement[], pose?: PlayerPose): void;
   resize(width: number, height: number): void;
   readonly domElement: HTMLCanvasElement;
 }
@@ -154,6 +166,23 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   key.position.set(5, 20, 10);
   scene.add(ambient, key);
 
+  // --- Placeholder avatar -------------------------------------------------
+  // A simple emissive capsule stands in for the rigged humanoid (#12). It is
+  // driven each frame purely from the player pose: x = lane, y += jump height,
+  // and a vertical squash for the slide. No animation clips here on purpose.
+  const avatar = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.5, 1, 6, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0x60ffe0,
+      emissive: 0x008866,
+      emissiveIntensity: 0.9,
+      metalness: 0.4,
+      roughness: 0.3,
+    }),
+  );
+  avatar.position.set(0, AVATAR_BASE_Y, AVATAR_Z);
+  scene.add(avatar);
+
   // --- Placement mesh pool (obstacles + coins) ---------------------------
   // Shared geometries/materials keep draw cost low; meshes are recycled rather
   // than created/destroyed as the track scrolls past the camera.
@@ -179,8 +208,21 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
 
   let lastDistance = 0;
 
-  function render(distance: number, placements: readonly Placement[] = []): void {
+  function render(
+    distance: number,
+    placements: readonly Placement[] = [],
+    pose?: PlayerPose,
+  ): void {
     lastDistance = distance;
+
+    // Drive the placeholder avatar from the player pose (lane x, jump y, slide
+    // squash). Squashing scales y and keeps the base on the deck by lowering
+    // the centre accordingly. Omitting `pose` leaves the avatar at rest.
+    if (pose) {
+      avatar.position.x = pose.x;
+      avatar.scale.y = pose.squash;
+      avatar.position.y = AVATAR_BASE_Y * pose.squash + pose.y;
+    }
     // Scroll the deck toward the camera by offsetting the texture; the plane
     // itself stays put so the camera remains a fixed chase rig.
     groundTexture.offset.y = -distance * SCROLL_TEXELS_PER_UNIT;

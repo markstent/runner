@@ -8,6 +8,8 @@ import {
   tick,
   type GameState,
 } from "./game/state.ts";
+import { createInitialPlayer, step, pose, type Intent } from "./player/index.ts";
+import { attachInput } from "./input/index.ts";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
@@ -61,6 +63,17 @@ function resetTrack(): void {
 
 resetTrack();
 
+// --- Player movement glue ----------------------------------------------
+// Player state lives here (separate from GameState by design). Keydown intents
+// are queued and drained one-per-frame into the pure `step`, so input reacts on
+// the same frame it arrives. The resulting pose drives the placeholder avatar.
+let player = createInitialPlayer();
+const intentQueue: Intent[] = [];
+
+attachInput(window, (intent) => {
+  if (state.phase === "playing") intentQueue.push(intent);
+});
+
 function score(s: GameState): number {
   return Math.floor(s.distance);
 }
@@ -89,6 +102,8 @@ startButton.addEventListener("click", () => {
 restartButton.addEventListener("click", () => {
   state = restart(state);
   resetTrack();
+  player = createInitialPlayer();
+  intentQueue.length = 0;
   syncOverlays();
 });
 
@@ -103,6 +118,12 @@ function frame(now: number): void {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   state = tick(state, dt);
+  // Advance the player only while playing; drain one queued intent per frame so
+  // movement reacts on the same frame as the keypress.
+  if (state.phase === "playing") {
+    const intent = intentQueue.shift() ?? null;
+    player = step(player, intent, dt);
+  }
   // Keep the track ahead of the player so it never runs out (endless).
   while (batchEndZ - state.distance < GROW_AHEAD_BUFFER) appendBatch();
   // Drop placements well behind the camera so the active window stays small.
@@ -110,7 +131,7 @@ function frame(now: number): void {
     track = track.filter((p) => p.z >= state.distance - KEEP_BEHIND_MARGIN);
   }
   syncHud();
-  scene.render(state.distance, track);
+  scene.render(state.distance, track, pose(player));
   requestAnimationFrame(frame);
 }
 
