@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   generate,
   isClearable,
+  nextBatch,
   LANES,
   ROW_SPACING,
   type Placement,
@@ -116,6 +117,35 @@ describe("fairness validator (isClearable)", () => {
   });
 });
 
+describe("nextBatch (endless append)", () => {
+  it("is deterministic for the same (seed, batchIndex)", () => {
+    const a = nextBatch(1337, 3, 0.5, 0);
+    const b = nextBatch(1337, 3, 0.5, 0);
+    expect(a).toEqual(b);
+  });
+
+  it("offsets every placement so the batch starts at/after zOffset", () => {
+    const offset = 1000;
+    const base = nextBatch(1337, 0, 0.5, 0);
+    const shifted = nextBatch(1337, 0, 0.5, offset);
+    // Same content, all z values translated by exactly `offset`.
+    expect(shifted.map((p) => p.z)).toEqual(base.map((p) => p.z + offset));
+    expect(Math.min(...shifted.map((p) => p.z))).toBeGreaterThanOrEqual(offset);
+  });
+
+  it("a batch and the concatenation of consecutive batches is clearable", () => {
+    let z = 0;
+    let combined: Placement[] = [];
+    for (let i = 0; i < 5; i++) {
+      const batch = nextBatch(1337, i, 0.5, z);
+      expect(isClearable(batch), `batch ${i} alone`).toBe(true);
+      combined = combined.concat(batch);
+      z = batch[batch.length - 1].z + ROW_SPACING;
+    }
+    expect(isClearable(combined)).toBe(true);
+  });
+});
+
 describe("clearability invariant", () => {
   it("every generated track is clearable across many seeds and difficulties", () => {
     const difficulties = [0, 0.25, 0.5, 0.75, 1];
@@ -128,9 +158,10 @@ describe("clearability invariant", () => {
     }
   });
 
-  it("a fixed seed is fully deterministic across difficulties", () => {
+  it("a fixed seed is fully deterministic, independent of difficulty", () => {
     expect(generate(99, 0.5)).toEqual(generate(99, 0.5));
-    // different difficulty may legitimately differ; just must be stable per pair
-    expect(generate(99, 1)).toEqual(generate(99, 1));
+    // difficulty is currently ignored for selection (#7 will consume it), so the
+    // same seed yields the same track regardless of the difficulty argument.
+    expect(generate(99, 1)).toEqual(generate(99, 0));
   });
 });

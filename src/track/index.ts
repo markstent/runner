@@ -102,26 +102,33 @@ const CATALOG: Chunk[] = [
   },
 ];
 
-/** Number of chunks to stitch per generated track (>=2 minutes of run). */
-const CHUNK_COUNT = 64;
+/**
+ * Number of chunks stitched into a single batch by `generate`. A batch is the
+ * unit the endless runner appends on demand (see `nextBatch`). At ~3-5 rows per
+ * chunk and ROW_SPACING=12 this is a few hundred world units of track, large
+ * enough to amortise generation cost but small enough to keep the active window
+ * cheap to prune.
+ */
+const CHUNK_COUNT = 8;
 
 /**
  * Deterministically generate a clearable sequence of placements for the given
- * seed and difficulty. Same (seed, difficulty) always yields an identical,
- * fair sequence.
+ * seed and difficulty. Same seed always yields an identical, fair sequence.
  *
- * Difficulty (0..1) biases chunk selection toward busier chunks but never
- * produces an unclearable track: each appended chunk is validated against the
- * accumulated tail before being accepted.
+ * `difficulty` (0..1) is accepted and clamped to satisfy the spec-mandated
+ * signature, but it does NOT currently bias selection: chunks are drawn
+ * uniformly from the catalog. The difficulty curve is a later task (#7), which
+ * will consume `difficulty` to bias chunk selection. Each appended chunk is
+ * validated against the accumulated tail before being accepted.
  */
 export function generate(seed: number, difficulty: number): Placement[] {
   const rng = makeRng(seed);
-  const d = clamp01(difficulty);
+  clamp01(difficulty); // accepted/clamped per spec; consumed by #7, ignored here
   const placements: Placement[] = [];
   let z = 0;
 
   for (let c = 0; c < CHUNK_COUNT; c++) {
-    const chunk = pickChunk(rng, d);
+    const chunk = pickChunk(rng);
     const rows = chunkRows(chunk, z);
     // Validate the accumulated track *including* this candidate stays clearable.
     const candidate = placements.concat(rows);
@@ -139,6 +146,28 @@ export function generate(seed: number, difficulty: number): Placement[] {
   return placements;
 }
 
+/**
+ * Produce the next batch of placements for an endless run, deterministically.
+ *
+ * Each batch is a full `generate` run (CHUNK_COUNT chunks) seeded by
+ * (seed, batchIndex) and translated so its first row starts at/after `zOffset`.
+ * Because every batch is independently clearable and is shifted only by a
+ * constant Z, the concatenation of consecutive batches is also clearable
+ * (clearability depends on relative row spacing, which translation preserves).
+ *
+ * Same (seed, batchIndex) always returns an identical batch. `difficulty` is
+ * forwarded to `generate` (accepted/clamped; consumed by #7).
+ */
+export function nextBatch(
+  seed: number,
+  batchIndex: number,
+  difficulty: number,
+  zOffset: number,
+): Placement[] {
+  const batch = generate(seed + batchIndex, difficulty);
+  return batch.map((p) => ({ ...p, z: p.z + zOffset }));
+}
+
 /** Materialize a chunk's rows into absolute-Z placements starting at baseZ. */
 function chunkRows(chunk: Chunk, baseZ: number): Placement[] {
   const out: Placement[] = [];
@@ -152,13 +181,9 @@ function chunkRows(chunk: Chunk, baseZ: number): Placement[] {
   return out;
 }
 
-/** Difficulty-biased deterministic chunk pick. */
-function pickChunk(rng: () => number, difficulty: number): Chunk {
-  // Bias: low difficulty favours early (calmer) chunks; high difficulty favours
-  // later (busier) chunks. Implemented by skewing a uniform draw.
-  const u = rng();
-  const skewed = Math.pow(u, 1 - 0.6 * difficulty);
-  const idx = Math.min(CATALOG.length - 1, Math.floor(skewed * CATALOG.length));
+/** Uniform deterministic chunk pick. (#7 will add difficulty biasing here.) */
+function pickChunk(rng: () => number): Chunk {
+  const idx = Math.min(CATALOG.length - 1, Math.floor(rng() * CATALOG.length));
   return CATALOG[idx];
 }
 
@@ -185,8 +210,7 @@ export function isClearable(placements: Placement[]): boolean {
   // Group obstacle placements by row (rows keyed by z). Coins are ignored.
   const rows = new Map<number, Set<Lane>>(); // z -> set of full-blocked lanes
   for (const p of placements) {
-    if (p.type === "coin") continue;
-    if (p.type !== "full-block") continue; // only full-block removes a lane
+    if (p.type !== "full-block") continue; // only full-block removes a lane (coins/low/high are survivable)
     let set = rows.get(p.z);
     if (!set) {
       set = new Set<Lane>();

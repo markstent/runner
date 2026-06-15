@@ -1,5 +1,5 @@
 import { createScene } from "./render/scene.ts";
-import { generate, type Placement } from "./track/index.ts";
+import { nextBatch, ROW_SPACING, type Placement } from "./track/index.ts";
 import {
   createInitialState,
   begin,
@@ -24,26 +24,37 @@ const scene = createScene(canvas);
 let state: GameState = createInitialState();
 
 // --- Endless track plumbing --------------------------------------------
+// Generation math lives in the tested track module (`nextBatch`). main.ts holds
+// only the imperative glue: the active track array, the grow-ahead trigger, the
+// prune-behind, and feeding the active track to the renderer.
+//
 // Difficulty is a fixed input for now (#7 makes it dynamic). Each batch is a
 // fair, deterministic placement sequence; we append the next batch (z-offset)
 // before the player reaches the end, giving an endless clearable track.
 const TRACK_DIFFICULTY = 0.5;
 const RUN_SEED = 1337;
+
+/** World-unit lookahead: keep generated track at least this far ahead of the player. */
+const GROW_AHEAD_BUFFER = 200;
+/** World-unit margin kept behind the camera before pruning passed placements. */
+const KEEP_BEHIND_MARGIN = 60;
+/** Only prune once the active window exceeds this many placements (cheap-window guard). */
+const MAX_TRACKED_PLACEMENTS = 256;
+
 let track: Placement[] = [];
-let nextBatch = 0;
+let batchIndex = 0;
 let batchEndZ = 0;
 
 function appendBatch(): void {
-  const batch = generate(RUN_SEED + nextBatch, TRACK_DIFFICULTY);
-  const offset = batchEndZ;
-  for (const p of batch) track.push({ ...p, z: p.z + offset });
-  batchEndZ = track.length > 0 ? track[track.length - 1].z : offset;
-  nextBatch++;
+  const batch = nextBatch(RUN_SEED, batchIndex, TRACK_DIFFICULTY, batchEndZ);
+  track.push(...batch);
+  batchEndZ = batch[batch.length - 1].z + ROW_SPACING;
+  batchIndex++;
 }
 
 function resetTrack(): void {
   track = [];
-  nextBatch = 0;
+  batchIndex = 0;
   batchEndZ = 0;
   appendBatch();
 }
@@ -93,10 +104,10 @@ function frame(now: number): void {
   last = now;
   state = tick(state, dt);
   // Keep the track ahead of the player so it never runs out (endless).
-  while (batchEndZ - state.distance < 200) appendBatch();
+  while (batchEndZ - state.distance < GROW_AHEAD_BUFFER) appendBatch();
   // Drop placements well behind the camera so the active window stays small.
-  if (track.length > 256 && track[0].z < state.distance - 60) {
-    track = track.filter((p) => p.z >= state.distance - 60);
+  if (track.length > MAX_TRACKED_PLACEMENTS && track[0].z < state.distance - KEEP_BEHIND_MARGIN) {
+    track = track.filter((p) => p.z >= state.distance - KEEP_BEHIND_MARGIN);
   }
   syncHud();
   scene.render(state.distance, track);
