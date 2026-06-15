@@ -9,6 +9,7 @@ import {
   type GameState,
 } from "./game/state.ts";
 import { createInitialPlayer, step, pose, type Intent } from "./player/index.ts";
+import { resolve } from "./collision/index.ts";
 import { attachInput } from "./input/index.ts";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
@@ -70,6 +71,10 @@ resetTrack();
 let player = createInitialPlayer();
 const intentQueue: Intent[] = [];
 
+// Coin tally lives here as composition-root glue (not in GameState), matching
+// how player/track state is held in main.ts. Incremented by collision results.
+let coins = 0;
+
 attachInput(window, (intent) => {
   if (state.phase === "playing") intentQueue.push(intent);
 });
@@ -87,7 +92,7 @@ function syncOverlays(): void {
 
 function syncHud(): void {
   scoreEl.textContent = String(score(state));
-  coinsEl.textContent = "0"; // coins arrive in a later task
+  coinsEl.textContent = String(coins);
 }
 
 function resize(): void {
@@ -104,14 +109,9 @@ restartButton.addEventListener("click", () => {
   resetTrack();
   player = createInitialPlayer();
   intentQueue.length = 0;
+  coins = 0;
   syncOverlays();
 });
-
-// Expose minimal crash hook for the smoke test / future gameplay wiring.
-(window as unknown as { __crash?: () => void }).__crash = () => {
-  state = crash(state);
-  syncOverlays();
-};
 
 let last = performance.now();
 function frame(now: number): void {
@@ -123,6 +123,19 @@ function frame(now: number): void {
   if (state.phase === "playing") {
     const intent = intentQueue.shift() ?? null;
     player = step(player, intent, dt);
+
+    // Resolve collisions against the active track at the player's z-band. A hit
+    // ends the run; collected coins are removed from the world and tallied.
+    const result = resolve(player, track, state.distance);
+    if (result.collected.length > 0) {
+      coins += result.coinsCollected;
+      const consumed = new Set(result.collected);
+      track = track.filter((p) => !consumed.has(p));
+    }
+    if (result.hit) {
+      state = crash(state);
+      syncOverlays();
+    }
   }
   // Keep the track ahead of the player so it never runs out (endless).
   while (batchEndZ - state.distance < GROW_AHEAD_BUFFER) appendBatch();
