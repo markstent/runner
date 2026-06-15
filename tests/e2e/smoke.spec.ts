@@ -33,4 +33,7 @@ test("page loads to a playable canvas", async ({ page }) => {
     .toBeGreaterThan(0);
   await expect(page.locator("#gameover-overlay")).toBeVisible({ timeout: 10000 });
   await expect(page.locator("#restart-button")).toBeVisible();
+
+  // Game-over overlay reports a persisted high score alongside the final score.
+  await expect(page.locator("#high-score")).toBeVisible();
 });
