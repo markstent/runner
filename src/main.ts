@@ -11,12 +11,14 @@ import {
 import { createInitialPlayer, step, pose, type Intent } from "./player/index.ts";
 import { resolve } from "./collision/index.ts";
 import { attachInput } from "./input/index.ts";
+import { scoreFor, createHighScore } from "./scoring/index.ts";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
 const scoreEl = document.getElementById("score") as HTMLElement;
 const coinsEl = document.getElementById("coins") as HTMLElement;
 const finalScoreEl = document.getElementById("final-score") as HTMLElement;
+const highScoreEl = document.getElementById("high-score") as HTMLElement;
 const startOverlay = document.getElementById("start-overlay") as HTMLElement;
 const gameOverOverlay = document.getElementById("gameover-overlay") as HTMLElement;
 const startButton = document.getElementById("start-button") as HTMLButtonElement;
@@ -79,15 +81,26 @@ attachInput(window, (intent) => {
   if (state.phase === "playing") intentQueue.push(intent);
 });
 
+// High-score store, persisted via real localStorage. Pure scoring + the storage
+// seam live in src/scoring; main.ts only supplies the live distance + coin tally
+// and the real storage backend. Construction is graceful if storage is absent.
+const highScore = createHighScore(window.localStorage);
+
 function score(s: GameState): number {
-  return Math.floor(s.distance);
+  return scoreFor(s.distance, coins);
 }
 
 function syncOverlays(): void {
   startOverlay.hidden = state.phase !== "start";
   gameOverOverlay.hidden = state.phase !== "gameOver";
   hud.hidden = state.phase === "start";
-  if (state.phase === "gameOver") finalScoreEl.textContent = String(score(state));
+  if (state.phase === "gameOver") {
+    const final = score(state);
+    finalScoreEl.textContent = String(final);
+    // Submit the final score; the returned best is what we display (covers the
+    // new-best case and the keep-previous case alike).
+    highScoreEl.textContent = String(highScore.submit(final));
+  }
 }
 
 function syncHud(): void {
