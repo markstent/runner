@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createInitialState, begin, crash, restart, tick } from "../../src/game/state.ts";
+import { createInitialState, begin, crash, restart, tick, SPEED } from "../../src/game/state.ts";
 
 describe("game state machine", () => {
   it("begins in the start state", () => {
@@ -39,6 +39,17 @@ describe("game state machine", () => {
     const b = tick(playing, 1);
     expect(b.distance).toBeCloseTo(a.distance * 2);
     expect(playing.distance).toBe(0);
+  });
+
+  it("tick(dt) defaults to the base SPEED when no speed is given", () => {
+    const playing = begin(createInitialState());
+    expect(tick(playing, 1).distance).toBe(SPEED);
+  });
+
+  it("tick(dt, speed) advances distance by the supplied dynamic speed", () => {
+    const playing = begin(createInitialState());
+    expect(tick(playing, 1, 30).distance).toBe(30);
+    expect(tick(playing, 0.5, 40).distance).toBeCloseTo(20);
   });
 
   it("restart() resets world distance to zero", () => {

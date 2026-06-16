@@ -12,6 +12,7 @@ import { createInitialPlayer, step, pose, type Intent } from "./player/index.ts"
 import { resolve } from "./collision/index.ts";
 import { attachInput } from "./input/index.ts";
 import { scoreFor, createHighScore } from "./scoring/index.ts";
+import { curve, generatorDifficulty } from "./difficulty/index.ts";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
@@ -33,10 +34,12 @@ let state: GameState = createInitialState();
 // only the imperative glue: the active track array, the grow-ahead trigger, the
 // prune-behind, and feeding the active track to the renderer.
 //
-// Difficulty is a fixed input for now (#7 makes it dynamic). Each batch is a
-// fair, deterministic placement sequence; we append the next batch (z-offset)
-// before the player reaches the end, giving an endless clearable track.
-const TRACK_DIFFICULTY = 0.5;
+// Difficulty is dynamic (#7): it is read from the pure difficulty curve, keyed
+// on world distance. Each batch is a fair, deterministic placement sequence; we
+// append the next batch (z-offset) before the player reaches the end, giving an
+// endless clearable track that hardens as the run progresses. The generator
+// difficulty for a batch is sampled at that batch's start z (where it will be
+// played), so later track is denser/more complex.
 const RUN_SEED = 1337;
 
 /** World-unit lookahead: keep generated track at least this far ahead of the player. */
@@ -51,7 +54,10 @@ let batchIndex = 0;
 let batchEndZ = 0;
 
 function appendBatch(): void {
-  const batch = nextBatch(RUN_SEED, batchIndex, TRACK_DIFFICULTY, batchEndZ);
+  // Sample the difficulty curve at this batch's start distance and collapse its
+  // density/complexity knobs into the generator's [0,1] difficulty argument.
+  const batchDifficulty = generatorDifficulty(curve(batchEndZ));
+  const batch = nextBatch(RUN_SEED, batchIndex, batchDifficulty, batchEndZ);
   track.push(...batch);
   batchEndZ = batch[batch.length - 1].z + ROW_SPACING;
   batchIndex++;
@@ -130,7 +136,8 @@ let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  state = tick(state, dt);
+  // Live scroll speed ramps with distance via the difficulty curve.
+  state = tick(state, dt, curve(state.distance).speed);
   // Advance the player only while playing; drain one queued intent per frame so
   // movement reacts on the same frame as the keypress.
   if (state.phase === "playing") {
