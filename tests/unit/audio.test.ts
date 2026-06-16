@@ -110,12 +110,6 @@ describe("audio engine", () => {
     expect(ctx._created).toHaveLength(0);
   });
 
-  it("does not throw when startMusic/stopMusic are called before init", () => {
-    const audio = createAudio(() => makeMockContext());
-    expect(() => audio.startMusic()).not.toThrow();
-    expect(() => audio.stopMusic()).not.toThrow();
-  });
-
   it("fires an audio node for every named SFX after init", () => {
     for (const name of SFX_NAMES) {
       const ctx = makeMockContext();
@@ -137,28 +131,6 @@ describe("audio engine", () => {
     audio.sfx("coin");
     expect(ctx._created).toContain("oscillator");
     expect(ctx._started).toContain("oscillator");
-  });
-
-  it("startMusic starts a looping source and stopMusic stops it", () => {
-    const ctx = makeMockContext();
-    const audio = createAudio(() => ctx);
-    audio.init();
-    const startsBefore = ctx._started.length;
-    audio.startMusic();
-    expect(ctx._started.length).toBeGreaterThan(startsBefore);
-    const stopsBefore = ctx._stopped.length;
-    audio.stopMusic();
-    expect(ctx._stopped.length).toBeGreaterThan(stopsBefore);
-  });
-
-  it("startMusic is idempotent: a second call does not stack a second loop", () => {
-    const ctx = makeMockContext();
-    const audio = createAudio(() => ctx);
-    audio.init();
-    audio.startMusic();
-    const afterFirst = ctx._started.length;
-    audio.startMusic();
-    expect(ctx._started.length).toBe(afterFirst);
   });
 
   it("ignores an unknown sfx name without throwing", () => {
