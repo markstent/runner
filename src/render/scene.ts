@@ -8,6 +8,8 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { LANE_X, type Placement } from "../track/index.ts";
 import type { PlayerPose } from "../player/index.ts";
 import { selectQualityTier, TIER_SETTINGS, type DeviceCaps } from "./quality.ts";
+import { avatarTransform } from "./avatar.ts";
+import { loadAvatarModel } from "./avatarModel.ts";
 
 // Where the avatar stands in front of the fixed chase camera (small negative Z).
 const AVATAR_Z = -2;
@@ -260,10 +262,13 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   }
   scene.add(ambient, key);
 
-  // --- Placeholder avatar -------------------------------------------------
-  // A simple emissive capsule stands in for the rigged humanoid (#12). It is
-  // driven each frame purely from the player pose: x = lane, y += jump height,
-  // and a vertical squash for the slide. No animation clips here on purpose.
+  // --- Avatar (rigged GLB with capsule fallback) --------------------------
+  // The placeholder capsule is the VISIBLE FALLBACK: it is shown immediately
+  // (createScene is synchronous) and stays until the rigged BrainStem GLB
+  // (#12) finishes loading, at which point the model is swapped in and the
+  // capsule hidden. If the GLB load fails the capsule simply remains and the
+  // game keeps working. Both are driven from the player pose via the same pure
+  // helper (avatar.ts): x = lane, y += jump height, vertical squash for slide.
   const avatar = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.5, 1, 6, 12),
     new THREE.MeshStandardMaterial({
@@ -277,6 +282,19 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   avatar.position.set(0, AVATAR_BASE_Y, AVATAR_Z);
   avatar.castShadow = settings.shadows;
   scene.add(avatar);
+
+  // Async-load the rigged model; swap it in over the capsule once ready. The
+  // mixer is advanced by `clock` each frame (the render() contract has no dt).
+  const clock = new THREE.Clock();
+  const avatarModel = loadAvatarModel({
+    baseY: AVATAR_BASE_Y,
+    z: AVATAR_Z,
+    shadows: settings.shadows,
+    onReady: (root) => {
+      scene.add(root);
+      avatar.visible = false;
+    },
+  });
 
   // --- Placement mesh pool (obstacles + coins) ---------------------------
   // Shared geometries/materials keep draw cost low; meshes are recycled rather
@@ -345,13 +363,21 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   ): void {
     lastDistance = distance;
 
-    // Drive the placeholder avatar from the player pose (lane x, jump y, slide
-    // squash). Squashing scales y and keeps the base on the deck by lowering
-    // the centre accordingly. Omitting `pose` leaves the avatar at rest.
+    // Advance the rigged model's animation mixer by real elapsed time (the
+    // render() contract carries no dt, so the scene owns a THREE.Clock).
+    avatarModel.update(clock.getDelta());
+
+    // Drive the avatar from the player pose (lane x, jump y, slide squash) via
+    // the shared pure helper. Squashing scales y and keeps the base on the deck
+    // by lowering the centre accordingly. The capsule fallback and the rigged
+    // model use the same mapping, so the swap is visually equivalent. Omitting
+    // `pose` leaves the avatar at rest.
     if (pose) {
-      avatar.position.x = pose.x;
-      avatar.scale.y = pose.squash;
-      avatar.position.y = AVATAR_BASE_Y * pose.squash + pose.y;
+      const t = avatarTransform(pose, AVATAR_BASE_Y);
+      avatar.position.x = t.x;
+      avatar.scale.y = t.scaleY;
+      avatar.position.y = t.y;
+      avatarModel.applyPose(pose);
     }
     // Scroll the deck toward the camera by offsetting the texture; the plane
     // itself stays put so the camera remains a fixed chase rig.
