@@ -9,10 +9,11 @@ import {
   type GameState,
 } from "./game/state.ts";
 import { createInitialPlayer, step, pose, type Intent } from "./player/index.ts";
-import { resolve } from "./collision/index.ts";
-import { attachInput } from "./input/index.ts";
+import { resolve, playerZ, HALF_DEPTH } from "./collision/index.ts";
+import { attachInput, attachTouchInput } from "./input/index.ts";
 import { scoreFor, createHighScore } from "./scoring/index.ts";
 import { curve, generatorDifficulty } from "./difficulty/index.ts";
+import { createAudio } from "./audio/index.ts";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
@@ -83,9 +84,36 @@ const intentQueue: Intent[] = [];
 // how player/track state is held in main.ts. Incremented by collision results.
 let coins = 0;
 
-attachInput(window, (intent) => {
-  if (state.phase === "playing") intentQueue.push(intent);
-});
+// --- Audio glue --------------------------------------------------------
+// The procedural Web Audio engine (src/audio) owns all sound; main.ts only
+// wires events to it. Per the browser autoplay policy, audio cannot start
+// before a user gesture, so `audio.init()` is called on the FIRST Start-click /
+// key / touch (init is idempotent, so calling it on every gesture is safe).
+// Music starts when play begins and stops on game over: a quiet game-over
+// screen reads as a clean end-of-run, and restart begins the loop again.
+const audio = createAudio();
+// Obstacle placements that have already fired a near-miss cue, so a single
+// jumped/slid-past obstacle chirps once rather than on every frame it straddles
+// the player's z-band. Cleared on restart.
+const nearMissed = new Set<Placement>();
+function unlockAudio(): void {
+  audio.init();
+}
+window.addEventListener("keydown", unlockAudio);
+window.addEventListener("touchstart", unlockAudio, { passive: true });
+
+// Keyboard and touch feed the SAME intent queue, so the player `step` is driven
+// identically by both. Each accepted movement intent also fires its SFX.
+function pushIntent(intent: Intent): void {
+  if (state.phase !== "playing") return;
+  intentQueue.push(intent);
+  if (intent === "left" || intent === "right") audio.sfx("lane-switch");
+  else if (intent === "jump") audio.sfx("jump");
+  else if (intent === "slide") audio.sfx("slide");
+}
+
+attachInput(window, pushIntent);
+attachTouchInput(window, pushIntent);
 
 // High-score store, persisted via real localStorage. Pure scoring + the storage
 // seam live in src/scoring; main.ts only supplies the live distance + coin tally
@@ -119,16 +147,21 @@ function resize(): void {
 }
 
 startButton.addEventListener("click", () => {
+  unlockAudio(); // first gesture: build + resume the AudioContext (autoplay-safe)
   state = begin(state);
+  audio.startMusic();
   syncOverlays();
 });
 
 restartButton.addEventListener("click", () => {
+  unlockAudio();
   state = restart(state);
   resetTrack();
   player = createInitialPlayer();
   intentQueue.length = 0;
   coins = 0;
+  nearMissed.clear();
+  audio.startMusic();
   syncOverlays();
 });
 
@@ -149,11 +182,31 @@ function frame(now: number): void {
     const result = resolve(player, track, state.distance);
     if (result.collected.length > 0) {
       coins += result.coinsCollected;
+      audio.sfx("coin"); // coin tally increased this frame
       const consumed = new Set(result.collected);
       track = track.filter((p) => !consumed.has(p));
     }
+    // Near-miss: an obstacle the player is actively CLEARING (jumping over a low
+    // obstacle, sliding under a high one) in an occupied lane within the z-band.
+    // Derived from collision/player outputs only; never modifies those modules.
+    // resolve() already proved this obstacle is NOT a hit (it was cleared), so a
+    // chirp here is a genuine "just dodged it" cue, fired once per obstacle.
+    if (player.mode === "jumping" || player.mode === "sliding") {
+      const clearableType = player.mode === "jumping" ? "obstacle-low" : "obstacle-high";
+      const pz = playerZ(state.distance);
+      for (const p of track) {
+        if (p.type !== clearableType) continue;
+        if (Math.abs(p.z - pz) > HALF_DEPTH) continue; // outside the z-band
+        if (p.lane !== player.lane && p.lane !== player.fromLane) continue; // not occupied
+        if (nearMissed.has(p)) continue; // already chirped for this obstacle
+        nearMissed.add(p);
+        audio.sfx("near-miss");
+      }
+    }
     if (result.hit) {
       state = crash(state);
+      audio.stopMusic(); // quiet game-over screen; restart resumes the loop
+      audio.sfx("crash");
       syncOverlays();
     }
   }
