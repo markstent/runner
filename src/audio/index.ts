@@ -38,8 +38,12 @@ export interface AudioContextLike {
 /** Factory for an AudioContext-like object (injectable for tests). */
 export type AudioContextFactory = () => AudioContextLike;
 
-/** The SFX this engine can fire, one per game event. */
-export const SFX_NAMES = ["lane-switch", "coin", "jump", "near-miss", "crash"] as const;
+/**
+ * The SFX this engine can fire, one per game event. The five required by the
+ * spec (lane-switch, coin, jump, near-miss, crash) plus "slide", which main.ts
+ * fires on a slide intent to mirror the jump cue.
+ */
+export const SFX_NAMES = ["lane-switch", "coin", "jump", "slide", "near-miss", "crash"] as const;
 export type SfxName = (typeof SFX_NAMES)[number];
 
 /** Public engine API returned by `createAudio`. */
@@ -117,6 +121,7 @@ const SFX_RENDERERS: Record<SfxName, (ctx: AudioContextLike, out: GainNode) => v
     blip(ctx, out, "square", 1320, 1760, 0.07, 0.18);
   },
   jump: (ctx, out) => blip(ctx, out, "sine", 220, 660, 0.18, 0.28),
+  slide: (ctx, out) => blip(ctx, out, "sine", 520, 180, 0.18, 0.24),
   "near-miss": (ctx, out) => blip(ctx, out, "sawtooth", 700, 260, 0.16, 0.2),
   crash: (ctx, out) => {
     blip(ctx, out, "sawtooth", 180, 40, 0.4, 0.32);

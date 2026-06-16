@@ -51,3 +51,29 @@ test("page loads to a playable canvas", async ({ page }) => {
   // no runtime/console errors (e.g. bad jsm import, WebGL/composer failure).
   expect(errors, errors.join("\n")).toEqual([]);
 });
+
+test("touch swipe and audio init keep the game playable", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+
+  await page.goto("/");
+  // Start the run (the first gesture also unlocks audio - must not throw).
+  await page.locator("#start-button").click();
+  await expect(page.locator("#hud")).toBeVisible();
+
+  // Dispatch a synthetic rightward swipe on the canvas. This exercises the touch
+  // listener -> swipeToIntent -> intentQueue path that mirrors keyboard input.
+  await page.locator("#game-canvas").dispatchEvent("touchstart", {
+    changedTouches: [{ identifier: 0, clientX: 40, clientY: 200 }],
+  });
+  await page.locator("#game-canvas").dispatchEvent("touchend", {
+    changedTouches: [{ identifier: 0, clientX: 200, clientY: 205 }],
+  });
+
+  // The run keeps advancing after the swipe (no crash from the touch wiring),
+  // and audio-on-first-gesture produced no uncaught autoplay/page errors.
+  await expect
+    .poll(async () => Number(await page.locator("#score").textContent()))
+    .toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
