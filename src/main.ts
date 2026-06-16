@@ -89,8 +89,7 @@ let coins = 0;
 // wires events to it. Per the browser autoplay policy, audio cannot start
 // before a user gesture, so `audio.init()` is called on the FIRST Start-click /
 // key / touch (init is idempotent, so calling it on every gesture is safe).
-// Music starts when play begins and stops on game over: a quiet game-over
-// screen reads as a clean end-of-run, and restart begins the loop again.
+// Sound effects only - there is no music bed.
 const audio = createAudio();
 // Obstacle placements that have already fired a near-miss cue, so a single
 // jumped/slid-past obstacle chirps once rather than on every frame it straddles
@@ -149,7 +148,6 @@ function resize(): void {
 startButton.addEventListener("click", () => {
   unlockAudio(); // first gesture: build + resume the AudioContext (autoplay-safe)
   state = begin(state);
-  audio.startMusic();
   syncOverlays();
 });
 
@@ -161,7 +159,6 @@ restartButton.addEventListener("click", () => {
   intentQueue.length = 0;
   coins = 0;
   nearMissed.clear();
-  audio.startMusic();
   syncOverlays();
 });
 
@@ -205,7 +202,6 @@ function frame(now: number): void {
     }
     if (result.hit) {
       state = crash(state);
-      audio.stopMusic(); // quiet game-over screen; restart resumes the loop
       audio.sfx("crash");
       syncOverlays();
     }

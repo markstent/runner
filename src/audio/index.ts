@@ -2,14 +2,13 @@
  * Procedural Web Audio engine for the runner.
  *
  * Everything here is GENERATED with the Web Audio API - there are no external
- * audio files. SFX are short oscillator/noise blips; the music bed is a small
- * looping synthwave-style arpeggio over a sustained pad. This keeps the game
+ * audio files. SFX are short oscillator/noise blips. This keeps the game
  * on-theme and fully self-contained.
  *
  * Design / testability
  * --------------------
  * The engine is a closure factory: `createAudio(ctxFactory?)` returns a small
- * public API `{ init, startMusic, stopMusic, sfx }`. The AudioContext is the
+ * public API `{ init, sfx }`. The AudioContext is the
  * single injected seam: the factory defaults to the real `AudioContext`, but a
  * unit test passes a mock that records node creation and start/stop calls, so
  * the engine's behaviour is verified WITHOUT producing real sound.
@@ -50,10 +49,6 @@ export type SfxName = (typeof SFX_NAMES)[number];
 export interface AudioEngine {
   /** Lazily build + resume the AudioContext on the first user gesture. Idempotent. */
   init(): void;
-  /** Start the looping music bed (idempotent - one loop at a time). */
-  startMusic(): void;
-  /** Stop the looping music bed if running. */
-  stopMusic(): void;
   /** Fire a one-shot sound effect by name. No-op before init / unknown name. */
   sfx(name: SfxName): void;
 }
@@ -129,59 +124,6 @@ const SFX_RENDERERS: Record<SfxName, (ctx: AudioContextLike, out: GainNode) => v
   },
 };
 
-/** A simple synthwave-style loop: an arpeggio over a sustained low pad. */
-function buildMusic(ctx: AudioContextLike, out: GainNode): { stop(): void } {
-  const t = ctx.currentTime;
-  const nodes: { stop(when: number): void; disconnect(): void }[] = [];
-
-  // Sustained pad: two detuned saws an octave apart for the synthwave bed.
-  for (const [hz, detune] of [
-    [110, -6],
-    [220, 6],
-  ] as const) {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(hz, t);
-    osc.detune.setValueAtTime(detune, t);
-    gain.gain.setValueAtTime(0.06, t);
-    osc.connect(gain).connect(out);
-    osc.start(t);
-    nodes.push(osc);
-  }
-
-  // Arpeggio: a looping bandsource that retriggers an osc would be heavier than
-  // we need for a "simple generated loop", so use one osc whose frequency steps
-  // through an A-minor-ish pattern; the loop is the periodic schedule itself.
-  const arp = ctx.createOscillator();
-  const arpGain = ctx.createGain();
-  arp.type = "triangle";
-  arpGain.gain.setValueAtTime(0.08, t);
-  arp.connect(arpGain).connect(out);
-  const pattern = [440, 523.25, 659.25, 523.25]; // A, C, E, C
-  const step = 0.25;
-  const bars = 64; // ~16s of schedule before it would need a refill; loops audibly
-  for (let i = 0; i < bars; i++) {
-    arp.frequency.setValueAtTime(pattern[i % pattern.length], t + i * step);
-  }
-  arp.start(t);
-  nodes.push(arp);
-
-  return {
-    stop() {
-      const now = ctx.currentTime;
-      for (const n of nodes) {
-        try {
-          n.stop(now);
-        } catch {
-          // already stopped - ignore
-        }
-        n.disconnect();
-      }
-    },
-  };
-}
-
 /**
  * Create the audio engine. `ctxFactory` is the injectable AudioContext seam;
  * it defaults to the real browser AudioContext and is replaced with a mock in
@@ -190,7 +132,6 @@ function buildMusic(ctx: AudioContextLike, out: GainNode): { stop(): void } {
 export function createAudio(ctxFactory: AudioContextFactory = defaultFactory): AudioEngine {
   let ctx: AudioContextLike | null = null;
   let master: GainNode | null = null;
-  let music: { stop(): void } | null = null;
 
   function init(): void {
     if (ctx !== null) return; // idempotent
@@ -202,18 +143,6 @@ export function createAudio(ctxFactory: AudioContextFactory = defaultFactory): A
     void ctx.resume();
   }
 
-  function startMusic(): void {
-    if (ctx === null || master === null) return; // not initialised yet
-    if (music !== null) return; // already playing - one loop at a time
-    music = buildMusic(ctx, master);
-  }
-
-  function stopMusic(): void {
-    if (music === null) return;
-    music.stop();
-    music = null;
-  }
-
   function sfx(name: SfxName): void {
     if (ctx === null || master === null) return; // not initialised yet
     const render = SFX_RENDERERS[name];
@@ -221,5 +150,5 @@ export function createAudio(ctxFactory: AudioContextFactory = defaultFactory): A
     render(ctx, master);
   }
 
-  return { init, startMusic, stopMusic, sfx };
+  return { init, sfx };
 }
