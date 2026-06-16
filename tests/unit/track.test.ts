@@ -215,10 +215,42 @@ describe("clearability invariant", () => {
     }
   });
 
-  it("a fixed seed is fully deterministic, independent of difficulty", () => {
+  it("is deterministic per (seed, difficulty): identical args yield identical tracks", () => {
     expect(generate(99, 0.5)).toEqual(generate(99, 0.5));
-    // difficulty is currently ignored for selection (#7 will consume it), so the
-    // same seed yields the same track regardless of the difficulty argument.
-    expect(generate(99, 1)).toEqual(generate(99, 0));
+    expect(generate(99, 1)).toEqual(generate(99, 1));
+    expect(generate(99, 0)).toEqual(generate(99, 0));
+  });
+});
+
+describe("difficulty drives generation", () => {
+  // Density proxy: number of obstacle (non-coin) placements in a track.
+  function obstacleCount(t: Placement[]): number {
+    return t.filter((p) => p.type !== "coin").length;
+  }
+
+  it("higher difficulty yields a measurably denser track over many seeds", () => {
+    let lowTotal = 0;
+    let highTotal = 0;
+    for (let seed = 0; seed < 50; seed++) {
+      lowTotal += obstacleCount(generate(seed, 0));
+      highTotal += obstacleCount(generate(seed, 1));
+    }
+    // Across the corpus, max difficulty must produce strictly more obstacles
+    // than min difficulty (the ramp is visible, not cosmetic).
+    expect(highTotal).toBeGreaterThan(lowTotal);
+  });
+
+  it("every generated track is clearable across the FULL ramp range", () => {
+    // Sample difficulties spanning the whole [0,1] output of the curve, many
+    // seeds each, to exercise the densest/most-complex layouts the ramp can ask
+    // for. The fairness invariant must hold at every point on the ramp.
+    const difficulties = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+    for (let seed = 0; seed < 100; seed++) {
+      for (const d of difficulties) {
+        const track = generate(seed, d);
+        expect(track.length).toBeGreaterThan(0);
+        expect(isClearable(track), `seed=${seed} difficulty=${d}`).toBe(true);
+      }
+    }
   });
 });

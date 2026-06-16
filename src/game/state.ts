@@ -6,7 +6,9 @@ export interface GameState {
   distance: number;
 }
 
-/** World scroll speed in units per second while playing. */
+/** Base/initial world scroll speed in units per second. The difficulty curve
+ * (src/difficulty) ramps the live speed above this as the run progresses; tick
+ * defaults to it so callers that don't supply a dynamic speed are unchanged. */
 export const SPEED = 20;
 
 export function createInitialState(): GameState {
@@ -27,8 +29,12 @@ export function restart(state: GameState): GameState {
   return { ...state, phase: "playing", distance: 0 };
 }
 
-/** Pure world step: advances distance by SPEED * dt only while playing. */
-export function tick(state: GameState, dt: number): GameState {
+/**
+ * Pure world step: advances distance by `speed * dt` only while playing.
+ * `speed` defaults to the base SPEED, so existing callers are unchanged; main.ts
+ * passes the difficulty curve's ramped speed for the live dynamic scroll.
+ */
+export function tick(state: GameState, dt: number, speed: number = SPEED): GameState {
   if (state.phase !== "playing") return state;
-  return { ...state, distance: state.distance + SPEED * dt };
+  return { ...state, distance: state.distance + speed * dt };
 }

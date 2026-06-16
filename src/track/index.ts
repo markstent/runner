@@ -120,22 +120,25 @@ const CHUNK_COUNT = 8;
 
 /**
  * Deterministically generate a clearable sequence of placements for the given
- * seed and difficulty. Same seed always yields an identical, fair sequence.
+ * seed and difficulty. Same (seed, difficulty) always yields an identical, fair
+ * sequence.
  *
- * `difficulty` (0..1) is accepted and clamped to satisfy the spec-mandated
- * signature, but it does NOT currently bias selection: chunks are drawn
- * uniformly from the catalog. The difficulty curve is a later task (#7), which
- * will consume `difficulty` to bias chunk selection. Each appended chunk is
- * validated against the accumulated tail before being accepted.
+ * `difficulty` (0..1, clamped) biases chunk selection toward heavier (denser,
+ * more complex) chunks: at d=0 chunks are drawn uniformly; as d rises, chunks
+ * carrying more obstacles / more lane-shifting become progressively more likely
+ * (see `pickChunk`). Each appended chunk is still validated against the
+ * accumulated tail before being accepted, so the fairness invariant holds at
+ * every difficulty: any candidate that would break clearability is replaced by
+ * the guaranteed-open breather. (#7)
  */
 export function generate(seed: number, difficulty: number): Placement[] {
   const rng = makeRng(seed);
-  clamp01(difficulty); // accepted/clamped per spec; consumed by #7, ignored here
+  const d = clamp01(difficulty);
   const placements: Placement[] = [];
   let z = 0;
 
   for (let c = 0; c < CHUNK_COUNT; c++) {
-    const chunk = pickChunk(rng);
+    const chunk = pickChunk(rng, d);
     const rows = chunkRows(chunk, z);
     // Validate the accumulated track *including* this candidate stays clearable.
     const candidate = placements.concat(rows);
@@ -169,8 +172,10 @@ export function generate(seed: number, difficulty: number): Placement[] {
  * so the concatenation is clearable by construction regardless of how the
  * previous batch ended or which zOffset the seam lands on.
  *
- * Same (seed, batchIndex) always returns an identical batch. `difficulty` is
- * forwarded to `generate` (accepted/clamped; consumed by #7).
+ * Same (seed, batchIndex, difficulty) always returns an identical batch.
+ * `difficulty` is forwarded to `generate`, biasing the body's chunk selection
+ * toward denser/more complex layouts. The breather lead-in is unconditional, so
+ * the seam guarantee holds at every difficulty.
  */
 export function nextBatch(
   seed: number,
@@ -202,10 +207,48 @@ function chunkRows(chunk: Chunk, baseZ: number): Placement[] {
   return out;
 }
 
-/** Uniform deterministic chunk pick. (#7 will add difficulty biasing here.) */
-function pickChunk(rng: () => number): Chunk {
-  const idx = Math.min(CATALOG.length - 1, Math.floor(rng() * CATALOG.length));
-  return CATALOG[idx];
+/**
+ * Per-chunk difficulty weight: how dense/complex a chunk is. We use the total
+ * count of obstacle (non-coin) cells as a simple, monotonic proxy - more
+ * obstacles and longer lane-shift patterns score higher, the breather scores 0.
+ */
+function chunkWeight(chunk: Chunk): number {
+  let n = 0;
+  for (const row of chunk.rows) {
+    for (const lane of LANES) {
+      const t = row[lane];
+      if (t && t !== "coin") n++;
+    }
+  }
+  return n;
+}
+
+const CHUNK_WEIGHTS: number[] = CATALOG.map(chunkWeight);
+
+/**
+ * How strongly difficulty skews selection toward heavy chunks. At difficulty d,
+ * chunk i is weighted by `1 + d * BIAS_STRENGTH * weight_i`. At d=0 this is a
+ * flat 1 for every chunk (uniform draw, preserving the original behaviour); as d
+ * rises, heavier chunks dominate, so denser/more complex layouts appear more
+ * often. The breather (weight 0) keeps weight 1 at all difficulties, so easy
+ * chunks never vanish entirely (fairness fallbacks stay reachable).
+ */
+const BIAS_STRENGTH = 2;
+
+/**
+ * Difficulty-biased deterministic chunk pick. A single rng() draw is mapped
+ * through a difficulty-dependent weighting, so the same (rng-sequence, d) always
+ * yields the same chunk. Higher d shifts probability mass toward heavier chunks.
+ */
+function pickChunk(rng: () => number, difficulty: number): Chunk {
+  const weights = CHUNK_WEIGHTS.map((w) => 1 + difficulty * BIAS_STRENGTH * w);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = rng() * total;
+  for (let i = 0; i < CATALOG.length; i++) {
+    r -= weights[i];
+    if (r < 0) return CATALOG[i];
+  }
+  return CATALOG[CATALOG.length - 1];
 }
 
 /**
