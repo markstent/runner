@@ -2,7 +2,7 @@
 
 A 3D, lane-based endless runner that runs in the browser. Dodge obstacles and grab coins on a procedurally generated neon track that speeds up the longer you survive.
 
-[![Built with Muster](https://img.shields.io/badge/built%20with-Muster-ff40c0?style=flat-square)](#built-with-muster)
+[![Built with Muster](https://img.shields.io/badge/built%20with-Muster-ff40c0?style=flat-square)](https://github.com/markstent/muster)
 [![Status](https://img.shields.io/badge/status-workflow%20experiment-20e0ff?style=flat-square)](#built-with-muster)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Three.js](https://img.shields.io/badge/Three.js-r169-000000?style=flat-square&logo=three.js&logoColor=white)](https://threejs.org/)
@@ -94,9 +94,7 @@ npm test && npm run test:e2e
 
 ## Built with Muster
 
-This project is an **experiment in agentic development workflow**. Rather than being written ad hoc, every line was produced through **Muster** — a structured, multi-stage workflow (a Claude Code command plugin) for building software with AI agents under human approval gates.
-
-> Replace this line with a link to the Muster repository you used.
+This project is an **experiment in agentic development workflow**. Rather than being written ad hoc, every line was produced through [Muster](https://github.com/markstent/muster) — a structured, multi-stage workflow (a Claude Code command plugin) for building software with AI agents under human approval gates.
 
 The whole game went through the Muster pipeline:
 
