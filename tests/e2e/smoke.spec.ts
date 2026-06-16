@@ -1,6 +1,16 @@
 import { test, expect } from "@playwright/test";
 
 test("page loads to a playable canvas", async ({ page }) => {
+  // The rendering pipeline (EffectComposer: bloom/DoF/motion-blur per quality
+  // tier) runs every frame. A hard fps assertion in headless CI is flaky, so we
+  // instead assert the pipeline drives the canvas without throwing: capture all
+  // page errors / console errors and require none by the end of a real run.
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
+  });
+
   await page.goto("/");
 
   // Canvas renders with real dimensions.
@@ -36,4 +46,8 @@ test("page loads to a playable canvas", async ({ page }) => {
 
   // Game-over overlay reports a persisted high score alongside the final score.
   await expect(page.locator("#high-score")).toBeVisible();
+
+  // The post-processing pipeline ran through a full play-to-gameover cycle with
+  // no runtime/console errors (e.g. bad jsm import, WebGL/composer failure).
+  expect(errors, errors.join("\n")).toEqual([]);
 });

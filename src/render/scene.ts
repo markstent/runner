@@ -1,6 +1,13 @@
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { AfterimagePass } from "three/examples/jsm/postprocessing/AfterimagePass.js";
+import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { LANE_X, type Placement } from "../track/index.ts";
 import type { PlayerPose } from "../player/index.ts";
+import { selectQualityTier, TIER_SETTINGS, type DeviceCaps } from "./quality.ts";
 
 // Where the avatar stands in front of the fixed chase camera (small negative Z).
 const AVATAR_Z = -2;
@@ -131,16 +138,88 @@ function makeThemedMeshes(): Record<Placement["type"], ThemedMesh> {
 }
 
 /**
- * Minimal cyberpunk rendering spine: a lit ground plane that scrolls toward a
- * fixed chase camera, plus a recycled pool of obstacle/coin meshes positioned
- * by the active track placements. No collision, scoring, or post-processing.
+ * Probe coarse device capabilities from the live renderer + browser so the
+ * quality tier can be chosen without hard-coding. Falls back to safe values
+ * when something is unavailable (which steers the tier toward "low").
+ */
+function probeCaps(renderer: THREE.WebGLRenderer): DeviceCaps {
+  const gl = renderer.getContext();
+  let maxTextureSize = 0;
+  try {
+    maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+  } catch {
+    maxTextureSize = 0;
+  }
+  const devicePixelRatio =
+    typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  // Low-power hint: a coarse pointer with no hover is a strong mobile signal.
+  let lowPower = false;
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    lowPower =
+      window.matchMedia("(pointer: coarse)").matches &&
+      !window.matchMedia("(hover: hover)").matches;
+  }
+  return { devicePixelRatio, maxTextureSize, lowPower };
+}
+
+/**
+ * Build a small procedural neon cube environment map used both as the scene
+ * environment (subtle IBL on the PBR materials) and as the source of the
+ * floor's reflections. This is the pragmatic "reflections" approximation: a
+ * reflective metallic floor sampling an env map rather than a true real-time
+ * reflection pass, which keeps the frame budget intact.
+ */
+function makeNeonEnvMap(renderer: THREE.WebGLRenderer): THREE.Texture {
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x05010f);
+  // A few large emissive panels give the floor coloured neon highlights.
+  const panels: Array<[number, number, number, number]> = [
+    [0xff20a0, -8, 6, 0],
+    [0x20e0ff, 8, 6, 0],
+    [0x9020ff, 0, 10, -8],
+  ];
+  for (const [color, x, y, z] of panels) {
+    const panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.MeshBasicMaterial({ color }),
+    );
+    panel.position.set(x, y, z);
+    panel.lookAt(0, 0, 0);
+    envScene.add(panel);
+  }
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = pmrem.fromScene(envScene).texture;
+  pmrem.dispose();
+  return env;
+}
+
+/**
+ * Cyberpunk rendering spine: a lit ground plane that scrolls toward a fixed
+ * chase camera, a recycled pool of obstacle/coin meshes, and a placeholder
+ * avatar driven by the player pose. Rendering is wrapped in an EffectComposer
+ * (bloom, motion blur, depth of field) whose passes and internal resolution are
+ * selected by a quality tier derived from device capabilities; weaker/mobile
+ * GPUs downgrade gracefully. Reflections are an env-map approximation on the
+ * metallic floor. No collision, scoring, or game logic here.
  */
 export function createScene(canvas: HTMLCanvasElement): RenderScene {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setClearColor(0x05010f);
 
+  const tier = selectQualityTier(probeCaps(renderer));
+  const settings = TIER_SETTINGS[tier];
+  if (settings.shadows) {
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  }
+
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x05010f, 20, 120);
+
+  // Env map drives both subtle PBR image-based lighting and the floor's neon
+  // reflections (see makeNeonEnvMap). Skipped on the low tier to save cost.
+  const envMap = settings.reflections ? makeNeonEnvMap(renderer) : null;
+  if (envMap) scene.environment = envMap;
 
   const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 500);
   camera.position.set(0, 5, 10);
@@ -153,17 +232,32 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
       map: groundTexture,
       emissive: 0x110022,
       emissiveIntensity: 0.6,
-      metalness: 0.4,
-      roughness: 0.6,
+      // When reflections are on, a smoother, more metallic floor catches the
+      // neon env map; otherwise keep the plain matte deck.
+      metalness: settings.reflections ? 0.9 : 0.4,
+      roughness: settings.reflections ? 0.25 : 0.6,
+      envMapIntensity: settings.reflections ? 1.0 : 0,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.z = -PLANE_LENGTH / 2 + 10;
+  ground.receiveShadow = settings.shadows;
   scene.add(ground);
 
   const ambient = new THREE.AmbientLight(0x2030ff, 0.4);
   const key = new THREE.DirectionalLight(0xff40c0, 1.2);
   key.position.set(5, 20, 10);
+  if (settings.shadows) {
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 80;
+    const d = 20;
+    key.shadow.camera.left = -d;
+    key.shadow.camera.right = d;
+    key.shadow.camera.top = d;
+    key.shadow.camera.bottom = -d;
+  }
   scene.add(ambient, key);
 
   // --- Placeholder avatar -------------------------------------------------
@@ -181,6 +275,7 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
     }),
   );
   avatar.position.set(0, AVATAR_BASE_Y, AVATAR_Z);
+  avatar.castShadow = settings.shadows;
   scene.add(avatar);
 
   // --- Placement mesh pool (obstacles + coins) ---------------------------
@@ -191,6 +286,7 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   for (let i = 0; i < POOL_SIZE; i++) {
     const m = new THREE.Mesh(themed.coin.geometry, themed.coin.material);
     m.visible = false;
+    m.castShadow = settings.shadows;
     scene.add(m);
     pool.push(m);
   }
@@ -207,6 +303,40 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
   }
 
   let lastDistance = 0;
+
+  // --- Post-processing composer ------------------------------------------
+  // Wrapped internally so the createScene contract is unchanged: render()/resize()
+  // drive the composer instead of the raw renderer. Passes are gated by tier.
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+
+  let bloomPass: UnrealBloomPass | null = null;
+  if (settings.bloom) {
+    bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(1, 1), // sized in resize()
+      0.9, // strength
+      0.6, // radius
+      0.85, // threshold: only bright neon blooms
+    );
+    composer.addPass(bloomPass);
+  }
+
+  if (settings.depthOfField) {
+    const bokeh = new BokehPass(scene, camera, {
+      focus: 14, // ~where obstacles read sharp ahead of the avatar
+      aperture: 0.0006,
+      maxblur: 0.01,
+    });
+    composer.addPass(bokeh);
+  }
+
+  if (settings.motionBlur) {
+    const afterimage = new AfterimagePass(0.82); // subtle speed trails
+    composer.addPass(afterimage);
+  }
+
+  // OutputPass handles tone mapping + color space at the end of the chain.
+  composer.addPass(new OutputPass());
 
   function render(
     distance: number,
@@ -238,11 +368,18 @@ export function createScene(canvas: HTMLCanvasElement): RenderScene {
     }
     for (let i = slot; i < pool.length; i++) pool[i].visible = false;
 
-    renderer.render(scene, camera);
+    composer.render();
   }
 
   function resize(width: number, height: number): void {
+    // renderScale shrinks the internal render target on weaker tiers while the
+    // canvas keeps its CSS size, trading sharpness for frame budget.
+    const scale = settings.renderScale;
     renderer.setSize(width, height, false);
+    renderer.setPixelRatio(scale);
+    composer.setSize(width, height);
+    composer.setPixelRatio(scale);
+    if (bloomPass) bloomPass.setSize(width * scale, height * scale);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
   }
